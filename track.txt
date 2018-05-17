@@ -1,0 +1,3 @@
+need to rewrite setDPFrom due to speed; running BFS in every head is too expensive. 
+
+wrote existsEndLabel() in spagraph; look at line 84 of spar, second condition sth wrong

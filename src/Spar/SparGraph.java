@@ -6,7 +6,6 @@ import java.util.HashSet;
 import java.util.Vector;
 
 import Spar.SparDBHandler;
-import Spar.SparGraph.Node;
 
 
 /**
@@ -24,7 +23,12 @@ public class SparGraph {
 		public String title;
 		public Integer backLinks;
 		public Integer vbackLinks=0;
-		public boolean scanned;
+		public String html;
+		public boolean scanned = false;
+		
+		// Nodes in the following set create a Directed path ending at current instance of Node
+		// Store ids not node class
+		HashSet<Integer> DPFrom = new HashSet<Integer>();
 		
 		
 		Node(Integer id, String url, String title, Integer backLinks){
@@ -33,14 +37,42 @@ public class SparGraph {
 			this.backLinks = backLinks;
 			this.title = title;
 		}
+		@Override
+		public String toString()
+		{
+			return "id = " + this.id + " url = " + this.url + " backlinks = " + this.backLinks;
+		}
+		
+		// Converts the DPFrom set to a string
+		public String dpFromToString()
+		{
+			return this.DPFrom.toString();
+		}
+		
+		// Creates the DPFrom from the given string 
+		public void setDPFrom (String s)
+		{
+			if(s.equals("[]"))
+				return;
+			
+			String[] subs;
+			if(s.contains(", "))
+			{
+				subs = s.replace("[", "").replace("]", "").split(", ");
+				for(String ss : subs)
+					this.DPFrom.add(Integer.parseInt(ss));
+			}
+			else
+			{
+				this.DPFrom.add(Integer.parseInt(s.replace("[", "").replace("]", "")));
+			} 
+			
+			return;
+		}
 		
 		void setVBackLinks(int vBL)
 		{
 			this.vbackLinks = vBL;
-		}
-		void setScanned()
-		{
-			this.scanned = true;
 		}
 	}
 		
@@ -56,6 +88,16 @@ public class SparGraph {
 			this.end = end;
 			this.label = label;
 		}
+		
+		public String toString()
+		{
+			return "id = " + this.id + " start = " + this.start + " end = " + this.end + " label = "+ this.label;
+		}
+		
+		public String endLabelCode()
+		{
+			return this.label+this.end;
+		}
 	}
 		
 
@@ -67,15 +109,16 @@ public class SparGraph {
 	private Vector<Edge> Edges;
 	
 	// Maps urls to Nodes; easy to getNodeByUrl
-	HashMap<String, Node> urlNodeMap = new HashMap<String, Node>();
+	private HashMap<String, Node> urlNodeMap = new HashMap<String, Node>();
 	
+	// Keeps track of the codes of added edges; to make sure that no edges with same end node and label are added
+	private HashSet<String> endLabelCodes = new HashSet<String>();
+	
+		
 	// Keep track of the indices of last node and edge added in DB
 	private Integer indOfLastNode = 0;
 	private Integer indOfLastEdge = 0;
-	
-	// Node's whose virtual BL have been updates; used for avoiding cycles in the recursion of constructVBackLinks()
-	private HashSet<Node> nodesVBLDone = new HashSet<Node>();
-	
+		
 	// Initialize new graph 
 	SparGraph(){
 		this.Nodes = new Vector<Node>();
@@ -88,23 +131,58 @@ public class SparGraph {
 		this.Edges=edges;
 	}
 	
-	public void addNode(Node n)
+	public synchronized Vector<Node> nodeSet()
 	{
+		return this.Nodes;
+	}
+
+	public synchronized Vector<Edge> edgeSet()
+	{
+		return this.Edges;
+	}
+	public synchronized void addNode(Node n)
+	{
+		// Add node to graph
 		Nodes.add(n);
+		
+		// Update the urlNode map
 		urlNodeMap.put(n.url, n);
+
 		return;
 	}
 	
-	public void addEdge(Edge e)
+	
+	/**
+	 * Checks if the an edge labeled by label to node end exists  
+	 * */
+	public synchronized boolean existsEndLabel(Node end, String label)
 	{
+		// Code = label+end		
+		if(endLabelCodes.contains(label+end.id)){
+			return true;
+		}
+		
+		return false;
+	}
+	
+	
+	/**
+	 * Adds an edge to graph and saves its endLabelCode
+	 * */
+	public synchronized void addEdge(Edge e)
+	{		
+		// Add it
 		Edges.add(e);
+		
+		// Save its code
+		endLabelCodes.add(e.endLabelCode());
 		return;
 	}
 	
 	/**
 	 * Add edge labeled by label from start to end nodes
 	 * */
-	public void addEdge(Node start, Node end, String label)
+	public synchronized void addEdge(Node start, Node end, String label)
 	{
 		// Id of new edge
 		Integer ind = Edges.size() + 1;
@@ -118,11 +196,19 @@ public class SparGraph {
 		return;
 	}
 	
+	/**
+	 * 
+	 * */
+	public synchronized void setScanned(Node n)
+	{
+		getNodeById(n.id).scanned = true;
+	}
+	
 	
 	/**
-	 * Create a new node for linkHref and add an Edge labeled with label between this and start
+	 * Create a new node for linkHref and add an Edge labeled with label between this and start; Return the added node
 	 * */
-	public void addNodeEdge(Node start, String linkHref, String label)
+	public synchronized Node addNodeEdge(Node start, String linkHref, String label)
 	{
 		  // Create node for linkHref; title empty for now
 		  Integer nodeHrefId = getNodesSize()+1;
@@ -134,17 +220,15 @@ public class SparGraph {
 		  Edge edgeUrlHref = new Edge(edgeUrlHrefId, start.id, nodeHrefId, label);
 		  addEdge(edgeUrlHref);
 
-		  return;
+		  return nodeHref;
 	}
 	
 	/**
 	 * Increase the backlink count of node id
 	 * */
-	public void increaseBackLinksOf(Integer nodeId)
+	public synchronized void increaseBackLinksOf(Node node)
 	{
-		Node n = getNodeById(nodeId);
-		n.backLinks++;
-		Nodes.set(nodeId - 1, n);
+		node.backLinks++;
 		return;
 	}
 	
@@ -152,12 +236,12 @@ public class SparGraph {
 	/**
 	 * Return the size of the Nodes and Edges vector
 	 * */
-	public Integer getNodesSize()
+	public synchronized Integer getNodesSize()
 	{
 		return Nodes.size();
 	}
 
-	public Integer getEdgesSize()
+	public synchronized Integer getEdgesSize()
 	{
 		return Edges.size();
 	}
@@ -165,16 +249,19 @@ public class SparGraph {
 	/**
 	 * Return a Node filtered by id
 	 */
-	public Node getNodeById (Integer id)
+	public synchronized Node getNodeById (Integer id)
 	{
 		// Note: Vector start indexing at 0; db starts at 1
-		return Nodes.elementAt(id - 1);
+		if (id <= getNodesSize())
+			return Nodes.elementAt(id - 1);
+		else
+			return null;
 	}
 	
 	/**
 	 * Return a Edge filtered by id
 	 */
-	public Edge getEdgeById (Integer id)
+	public synchronized Edge getEdgeById (Integer id)
 	{
 		// Note: Vector start indexing at 0; db starts at 1
 		return Edges.elementAt(id - 1);
@@ -184,7 +271,7 @@ public class SparGraph {
 	/**
 	 * Return Node of url
 	 */
-	public Node getNodeByUrl(String url) 
+	public synchronized Node getNodeByUrl(String url) 
 	{		
 		// Find the node of given url; null if none
 		return urlNodeMap.get(url);
@@ -193,7 +280,7 @@ public class SparGraph {
 	/**
 	 * Return outgoing edges of Node n
 	 * */
-	public Vector<Edge> getOutEdgesOf(Node n)
+	public synchronized Vector<Edge> getOutEdgesOf(Node n)
 	{
 		Vector<Edge> out = new Vector<Edge>();
 		for(Edge e : Edges)
@@ -206,7 +293,7 @@ public class SparGraph {
 	/**
 	 * Return ingoing edges of nodeId
 	 * */
-	public Vector<Edge> getInEdgesOf(Node n)
+	public synchronized Vector<Edge> getInEdgesOf(Node n)
 	{
 		Vector<Edge> out = new Vector<Edge>();
 		for(Edge e : Edges)
@@ -216,11 +303,61 @@ public class SparGraph {
 		return out;
 	}
 	
+	/**
+	 * Returns the edge labels on directed paths ending on end
+	 * */
+	public synchronized HashSet<String> traceBackLabels(Node end)
+	{
+		// Pending and done lists
+		Vector<Node> queue = new Vector<Node>();
+		HashSet<Node> visited = new HashSet<Node>();
+		
+		HashSet<String> labels = new HashSet<String>();
+		
+		// Add end node to pending
+		queue.add(end);
+		
+		Node head;
+		Integer i = 0;	
+		
+		// Loop over queue
+		while(i < queue.size())
+		{		
+			// Get head
+			head = queue.get(i);
+			System.out.println(head.url);
+
+			// Add head to visited
+			visited.add(head);
+			// Get in edges 
+			Vector<Edge> in = getInEdgesOf(head);
+
+			//Loop over them
+			for(Edge e : in){
+				// Get parent
+				Node parent = getNodeById(e.start);
+
+				// Add label; temp, adds BL too
+				labels.add(e.label+parent.backLinks);
+				
+				// Add those not already visited
+				if(!visited.contains(parent) && !labels.contains(e.label))
+					queue.add(parent);
+			}
+			i++;
+		}
+		
+		return labels;
+	}
+	
 	
 	/**
-	 * Get the set of nodes that have a directed path ending at end 
+	 * Stores the ids of nodes that have a directed path ending at end in end.DPFrom; need to store ids cuz they
+	 * are needed when loading the graph 
+	 * 
+	 * Depreciated; essentially BFS following reverse edge directions; too slow to run it every time a new node is scanned
 	 * */
-	public HashSet<Node> getDPstartingNodes(Node end)
+	public synchronized void getDPstartingNodes(Node end)
 	{		
 		// Pending and done lists
 		Vector<Node> queue = new Vector<Node>();
@@ -239,6 +376,8 @@ public class SparGraph {
 			head = queue.get(i);
 			// Add head to visited
 			visited.add(head);
+			// Store its id
+			end.DPFrom.add(head.id);
 			// Get in edges 
 			Vector<Edge> in = getInEdgesOf(head);
 
@@ -252,43 +391,77 @@ public class SparGraph {
 			i++;
 		}
 		
-		return visited;
+		return;
+	}
+	
+	
+	/**
+	 * Sets the set end.PDFrom; recursively
+	 * */
+	public synchronized void setDPFrom(Node end)
+	{
+		// Node has DP from itself; trivial
+		end.DPFrom.add(end.id);
+		
+		// Get end's parents
+		Vector<Node> parents = getParentsOf(end);
+		
+		// Add p.DPFrom to end.DPFrom for all parents p 
+		for(Node p : parents)
+			end.DPFrom.addAll(p.DPFrom);		
+		
+		return;
+	}
+	
+	
+	/**
+	 * Returns the parents of n
+	 * */
+	public synchronized Vector<Node> getParentsOf (Node n)
+	{
+		Vector<Node> parents = new Vector<Node>();
+		Vector<Edge> in = getInEdgesOf(n);
+		for(Edge e : in)
+			parents.add(getNodeById(e.start));		
+		return parents;
+	}
+	
+	public synchronized boolean existsDP (Node start, Node end)
+	{		
+		// Check if start is in there
+		return getNodeById(end.id).DPFrom.contains(start.id);
 	}
 	
 	/**
 	 * Transfer new Nodes and Edges to DB and update previous nodes (cuz of new backlinks and vbacklinks)
 	 * @throws SQLException 
 	 * */
-	public void transferToDB(SparDBHandler dbHandler) throws SQLException
+	public synchronized void transferToDB(SparDBHandler dbHandler) throws SQLException
 	{
 		// Make sure virtual backlinks are update before putting in db
 		//nodesVBLDone = new HashSet<Node>();
-		//constructVBackLinks(Nodes.firstElement());
+		//constructVBackLinks(Nodes.firstElement());		
 		
 		// Update existing nodes (new v/backlinks count)
-		Integer i=0;
-		for(i=0; i < indOfLastNode; i++)
-			dbHandler.updateNodesTable(Nodes.elementAt(i));
+		dbHandler.updateNodesTable(Nodes.subList(0, indOfLastNode));
 		
 		// Put new nodes
-		while(indOfLastNode < Nodes.size()){
-			dbHandler.putInNodesTable(Nodes.get(indOfLastNode));
-			indOfLastNode++;
-		}
-			
+		dbHandler.putInNodesTable(Nodes.subList(indOfLastNode, Nodes.size()));
+	
 		// Put new edges
-		while(indOfLastEdge < Edges.size()){
-			dbHandler.putInEdgesTable(Edges.get(indOfLastEdge));
-			indOfLastEdge++;
-		}
+		dbHandler.putInEdgesTable(Edges.subList(indOfLastEdge, Edges.size()));
 		
+		// Update counters
+		indOfLastNode = Nodes.size();
+		indOfLastEdge = Edges.size();
+
 		return;
 	}
 	
 	/**
 	 * Returns the children of the given node
 	 * */
-	public Vector<Node> getChildrenOf (Node n)
+	public synchronized Vector<Node> getChildrenOf (Node n)
 	{
 		Vector<Node> children = new Vector<Node>();
 		
@@ -303,57 +476,71 @@ public class SparGraph {
 		
 	}
 	
+	/**
+	 * Returns the children of the given node
+	 * */
+	public synchronized Vector<String> getLabelsToChildrenOf (Node n)
+	{
+		Vector<String> labels = new Vector<String>();
+		
+		// Get outgoing edges of node
+		Vector<Edge> out = getOutEdgesOf(n);
+		
+		// Scan them and add their end nodes to children vector
+		for(Edge e : out)
+			labels.add(e.label);
+		
+		return labels;
+		
+	}
 	
 	/**
 	 * Returns the node that was last scanned in a previous run
 	 * */
-	public Node lastScanned()
+	public synchronized Node firstNotScanned()
 	{
-		Node last = Nodes.firstElement(); // worst case it's the first
-		Integer i = 0;
+		Node first = Nodes.lastElement(); // worst case when size=1
+
+		Integer i = Nodes.size() - 1;
 		boolean found = false;
 		
-		while(i < getNodesSize() && !found){
-			if(!Nodes.get(i).scanned){
-				last = Nodes.get(i-1);
+		while(i >= 0 && !found){
+			if(Nodes.get(i).scanned){
+				first = Nodes.get(i+1);
 				found = true;
 			}
-			i++;
+			i--;
 		}
-		return last;
+
+		return first;
 	}
 	
 	/**
-	 * Calculates the virtual backlinks of nodes; 
-	 * 
-	 * For a node u having children Cu, the vBackLinks are defined as max(BL(u),max(BL(C(u))))
+	 * Increases the virtual backlinks of nodes that have a directed path to the given nid; 
+	 * There is a BL B->A if there is a directed path A->B 
 	 * */
-	public void constructVBackLinks(Node parent)
+	public synchronized void increaseVBackLinksOf(Integer nid)
 	{
-		// Init parent's backlinks count; only needed for the zero-th level recursion
-		parent.setVBackLinks(parent.backLinks);
-				
-		// Get children
-		Vector<Node> children = getChildrenOf(parent);
+		// Increase vBL of nid 
+		getNodeById(nid).vbackLinks = getNodeById(nid).vbackLinks + 1;
+
 		
-		if(children.isEmpty() || nodesVBLDone.contains(parent))// has reached leaves or parent's vBL have been updated; avoids cycles
-			return;
-		
-		nodesVBLDone.add(parent);
-		
-		for(Node child : children)
-		{
-			// Init child's VbackLinks to its own backlinks 
-			child.setVBackLinks(child.backLinks);
-			
-			// Construct its vBackLinks; recursively
-			constructVBackLinks(child);
-						
-			// Compare to parent's backlinks
-			if(child.vbackLinks > parent.vbackLinks)
-				parent.vbackLinks = child.vbackLinks;
-			
-		}	
+	}
+
+	public synchronized Integer getIndOfLastNode() {
+		return indOfLastNode;
+	}
+
+	public synchronized void setIndOfLastNode(Integer indOfLastNode) {
+		this.indOfLastNode = indOfLastNode;
+	}
+
+	public synchronized Integer getIndOfLastEdge() {
+		return indOfLastEdge;
+	}
+
+	public synchronized void setIndOfLastEdge(Integer indOfLastEdge) {
+		this.indOfLastEdge = indOfLastEdge;
 	}				
 
 }

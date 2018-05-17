@@ -1,25 +1,24 @@
 package Spar;
 
-import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.Queue;
+import java.util.Scanner;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.Vector;
-import org.jsoup.*;
-import org.jsoup.nodes.Document;
+
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import Spar.SparGraph.*;
-import Spar.SparDBHandler.*;
-
 import java.sql.*;
 
 public class Spar {
@@ -30,233 +29,234 @@ public class Spar {
 	// The db data
 	static SparGraph Graph;
 		
-	// For logging to file
-	private static PrintWriter outLog;
-	
-	// Log links pending
-	private static PrintWriter outPendingLinks;
-	
-	// Vector of Pending urls
-	private static Vector<String> LinksPending = new Vector<String>();
-	
-	// Urls done
-	private static HashSet<String> LinksScanned = new HashSet<String>();
-	
 	// Counts the nodes and edges added to graph
 	private static Integer addedNodes = 0;
 	private static Integer addedEdges = 0;
 	
-	static //Make sure each link contains this
-	String TopLevel = "https://www.ethz.ch/en";
-	
-	// Keeps track of the url that have been backlinked
-	private static Vector<String> backLinked = new Vector<String>();
-	
-	/**
-	 * Log to file; should already exist
-	 * */
-	
-	private static void Log(PrintWriter out, String text) 
-	{
-		out.write(text);
-		return;
-	}
-	
-	
-	/**
-	 * Convert string to url; no www, needed for jsoup
-	 */
-	private static URL stringToURL(String url) throws MalformedURLException
-	{
-		// Remove www, add protocol and return a URL
-		url = url.replace("www.", "");
+	static String TopLevel;
 		
-		if(!url.contains("http"))
-			url="http://"+url;
-
-		return new URL(url);
-	}
+	static PrintWriter log;
 	
 	
-	private static void scanWebsite(String url) throws MalformedURLException
-	{	
-		// If already scanned, return
-		if(LinksScanned.contains(url))
-			return;
-						
-		// Add it to done list
-		LinksScanned.add(url);
+	private static void parseElement(Node head, Elements links) throws FileNotFoundException
+	{							
 		
-		// Grap page
-		Document page=null;
-		try {
-			page = Jsoup.connect(url).get();
-		} catch (IOException e1) {
-		}
-		if(page==null)return;
+		// Set head to scanned
+		Graph.setScanned(head);
 		
-		// LOG 
-		Log(outLog, "Scanning "+url+"\n");
-				
-		// Get links in page
-		Elements links = page.getElementsByTag("a");
+		// Get nodes lying on a DP ending at head; stores them in head.DPFrom
+		Graph.setDPFrom(head);
+					
+		log  = new PrintWriter(new FileOutputStream("tmp.txt",true));
+		log.write("Scanning " + head.url+ " " + head.DPFrom.toString() +"\n");
 		
-		// Get node of url
-		Node nodeUrl = Graph.getNodeByUrl(url);
-				
-		// Set nodeUrl to scanned
-		nodeUrl.setScanned();
-		
-		// Set the DP ending at nodeUrl
-		HashSet<Node> dpStarts = new HashSet<Node>(); 
+		// Keeps track of the links in current page that have been added to graph; to avoid duplicates
+		Vector<String> done = new Vector<String>();			
 				
 		for (Element link : links) {
 			  // Get href of current link
 			  String linkHref = link.attr("abs:href");
+
 			  // Get text on link
-			  String linkText = link.text();
+			  String linkText = link.text();			  
 
-//			  /**
-//			   * Add current Href to the Links the pending list iff
-//			   * 	it points to the same website as parentlink - scanning only one website for now
-//			   * 	it is not in pending list
-//			   * 	it has not been scanned
-//			   * 	the link text is not empty
-//			   * */
-//			  if(linkHref.contains(TopLevel) && !LinksScanned.contains(linkHref) 
-//					  && !LinksPending.contains(linkHref) && !linkText.isEmpty() && !linkHref.contains("#")){
-//				  LinksPending.add(linkHref);
-//				  Log(outPendingLinks, linkHref+"\n");
-//			  }
-			  
-			  
-			  // Only add links from the same host to db
-			  if(linkHref.contains(TopLevel) & !linkHref.contains("#") && !linkText.isEmpty())
-			  {
+			  if(linkText.isEmpty())
+				  linkText  = link.attr("title");
 
-				  Log(outLog, "-Processing link " + linkHref + " ...");
+			  // Only add links from the same host
+			  if((linkHref.contains(TopLevel) || linkHref.contains("bbc.com")) && !linkHref.contains("#") && !done.contains(linkHref))
+			  {				  
+				  // Add to done links
+				  done.add(linkHref);
 				  
 				  // Get node of Href; if any
 				  Node nodeHref = Graph.getNodeByUrl(linkHref);
 				  
-				  if( nodeHref == null)
+				  log.write("-Processing link " + linkHref);
+				  
+				  if( nodeHref == null && !linkText.isEmpty())
 				  {
-					  // Node in Graph, add it and create edge linkHref->url
-					  // If linkHref is not in graph, edge linkHref->url cannot create cycle
-					  Graph.addNodeEdge(nodeUrl, linkHref, linkText);
-					  
-					  // LOG 
-					  Log(outLog, "not in graph; adding it\n");
-					  
+					  log.write(" not in graph; adding it\n");
+					  // Node not in Graph, add it and create edge linkHref->head
+					  // If linkHref is not in graph, edge linkHref->head cannot create cycle
+					  nodeHref = Graph.addNodeEdge(head, linkHref, linkText);
+					  					  					  
 					  // Increase counters
 					  addedNodes++;
 					  addedEdges++;
-				  }else
+				  }else if (nodeHref != null)
 				  {
-					  if(dpStarts.contains(nodeHref)) // url->linkHref creates directed cycle
+					  if(head.DPFrom.contains(nodeHref.id)) // head->linkHref creates directed cycle
 					  {		
-						  Log(outLog, "creates directed cycle\n");
-						  Graph.increaseBackLinksOf(nodeHref.id); // increase its backlink count
-					  }else // linkHref->url creates no directed cycle; add edge 
+						  log.write(" creates directed cycle\n");
+						  
+						  // Increase BL count of nodeHref
+						  Graph.increaseBackLinksOf(nodeHref); 
+						  
+						  // Increase vBL of nodes in nodeHref.DPFrom
+						  for(Integer n : head.DPFrom)
+								  Graph.increaseVBackLinksOf(n); 
+					  }
+					  else if(Graph.existsEndLabel(nodeHref, linkText)) // there is a edge ending at end nodeHref with same label
 					  {
-						  Log(outLog, "is graph; no directed cycle\n");
-						  Graph.addEdge(nodeUrl, nodeHref, linkText);
+						  log.write(" same endLabel exists\n");
+						  
+						  // Increase BL count of nodeHref
+						  Graph.increaseBackLinksOf(nodeHref); 
+						  
+						  // Increase vBL of nodes in nodeHref.DPFrom
+						  for(Integer n : head.DPFrom)
+								  Graph.increaseVBackLinksOf(n); 
+					  }
+					  else // linkHref->head creates no directed cycle; add edge 
+					  {
+						  log.write(" is in graph; no directed cycle\n");
+						  Graph.addEdge(head, nodeHref, linkText);
 						  addedEdges++;
 					  }
 				  }
 			  }
-			}
-		
-		// Log
-		Log(outLog, "\n");
-		
+		}
+		log.close();
+
 		// Print progress
-		System.out.println("Links done="+LinksScanned.size());
-		System.out.println("Links done="+LinksPending.size());	
+		System.out.println("Nodes done=" + head.id);
+		System.out.println("Nodes overal = " + Graph.getNodesSize());	
 		return;
 	}
 	
-	private static void LoadFromFile() throws IOException
-	{
-		BufferedReader br = new BufferedReader(new FileReader("pending.txt"));
-		for(String line; (line = br.readLine()) != null; ) 
-		{
-			line.replace("\n", "");
-		    LinksPending.add(line);
-		}
-		    
-		br = new BufferedReader(new FileReader("log.txt"));
-		for(String line; (line = br.readLine()) != null; ) 
-		{
-			if(line.contains("Scanning ")){
-				line.replace("\n", "").replace("Scanning ", "");
-		    	LinksScanned.add(line);
-		    }
-		}
-	}
-	
-	
-	// Temporary helper function
-	public static void scan() throws IOException, SQLException, InstantiationException, IllegalAccessException, ClassNotFoundException
-	{
-		// Set initial link and and node
-		LinksPending.add("https://www.ethz.ch/en.html");
-
-		// Initialize graph
-		Graph = new SparGraph();
+	/**
+	 * Starting from node head in the graph, it crawls N successive nodes in parallel and calls parseElements when each node is done
+	 * Need to check if concurrency problems in the Graph arise 
+	 * */
+	public static void scan(Integer headId) throws IOException, SQLException, InstantiationException, IllegalAccessException, ClassNotFoundException
+	{		
+		// Number of parallel requests
+		Integer N = 500;
 		
-		// Set initial link and and node
-		LinksPending.add("https://www.ethz.ch/en.html");
-		Graph.addNode(new Node(1,"https://www.ethz.ch/en.html","",0));
-
-		// Init tables in db
-		db = new SparDBHandler("eth_nodes", "eth_edges");
-		db.dropTables();
-		db.createTables();
-				
-		//Logging
-		outLog = new PrintWriter(new FileOutputStream("log.txt",true));
-		outPendingLinks = new PrintWriter(new FileOutputStream("pending.txt",true));
-						
+		boolean done = false;
+		
 		// Start scanning
-		for(int i = 0; i < LinksPending.size(); i++){		
-			db = new SparDBHandler("eth_nodes", "eth_edges");
-			scanWebsite(LinksPending.elementAt(i));
-			if(addedNodes > 500){// save them to db
+		do{				
+			// Parallel request upto tail
+			Integer tail = headId + N;
+			
+			ArrayList<SparCrawl> crawlers = new ArrayList<>();
+
+			if(headId == 1)// start node; only one thread
+			{
+				// Create thread
+				SparCrawl w = new SparCrawl(Graph.getNodeById(headId));
+				crawlers.add(w);
+	        	new Thread(w).start();
+	        	
+	        	// Move head
+	        	headId++;;
+			}else if (tail >= Graph.getNodesSize() && headId!=1) // reached end row; threads upto to that
+			{
+				while (headId < Graph.getNodesSize()){
+					// Create thread 
+					SparCrawl w = new SparCrawl(Graph.getNodeById(headId));
+					crawlers.add(w);
+		        	new Thread(w).start();
+		        	
+		        	// Move head
+		        	headId++;
+				}
+				done=true;
+			}else// none of above; start N threads
+			{
+				while(headId < tail){
+					// Create thread
+					SparCrawl w = new SparCrawl(Graph.getNodeById(headId));
+					crawlers.add(w);
+		        	new Thread(w).start();
+		        	
+		        	// Move head
+		        	headId++;
+				}
+			}
+			
+		    // Retrieve results
+		    for (SparCrawl c : crawlers) 
+		    {
+		    	Elements links = c.waitForResults();
+		    	if(links != null)
+		    	{
+		    		Node current = c.getNode();
+		    	//	PrintWriter nodeOut = new PrintWriter(new FileOutputStream("./cnn_nodes/node_"+current.id));
+		    		//nodeOut.write(current.html);
+		    		current.html = null; //to save memory; not needed anymore
+		    		//nodeOut.close();
+		    		parseElement(current, links);
+		    	}
+			}
+			
+			// Save to DB every 3000 new nodes or when done
+			if(addedNodes > 2000 || done){
 				System.out.println("Adding " + addedNodes + " nodes and " + addedEdges + " edges to db.");
 				Graph.transferToDB(db);
-				db.close();
+				
 				//reset counters
 				addedEdges=0;
 				addedNodes=0;
-			}
-		}
-		
-		
-		// Close file and connection
-		outLog.close();
-		outPendingLinks.close();
-		
+			}		
+		}while(!done);
 	}
-		
+
+
 	public static void main(String[] args) throws IOException, SQLException, InstantiationException, IllegalAccessException, ClassNotFoundException
 	{		
-		//scan();		
+		// Current website
+		TopLevel = new String("edition.cnn.com");
 		
-		db = new SparDBHandler("eth_nodes", "eth_edges");
-		SparGraph Graph = db.loadGraph();
-		System.out.println(Graph.getNodeById(1).url);
-		Node last=Graph.lastScanned();
+		// Init tables in db
+		db = new SparDBHandler("cnn_nodes", "cnn_edges");
+		//db.dropTables();
+		db.createTables();
 		
+		// Initialize graph
+		Graph = db.loadGraph();
+		if(Graph.getNodesSize() != 0)
+		{
+			Graph.setIndOfLastEdge(Graph.getEdgesSize());
+			Graph.setIndOfLastNode(Graph.getNodesSize());
+		}
+		else
+		{				
+			Node root = new Node(1,"http://edition.cnn.com/","",0);
+			//Node head = new Node(2,"http://www.bbc.com/","",0);
+			Graph.addNode(root);
+			//Graph.addNode(head);
+		}
 		
+		//scan(1);
+		//scan(Graph.firstNotScanned().id);
+
+		PrintWriter pr  = new PrintWriter(new FileOutputStream("endlabel.txt",true));
+
+		SortedMap<String, Integer> map = new TreeMap<String, Integer>();
+
+		for (Edge e : Graph.edgeSet())
+		{
+			pr.write(e.label +"\t" + Graph.getNodeById(e.start).backLinks + "\t" +Graph.getNodeById(e.end).backLinks+"\n");	
+		}
+	
 		
-		
-		
-		
-		
-		
-		
-		
+//		String s = new String();
+//		do{
+//			Scanner scanner = new Scanner (System.in);
+//			System.out.print("Enter node url");  
+//			s = scanner.next(); // Get what the user types.
+//			System.out.println(s);
+//			Node ns = Graph.getNodeByUrl(s);
+//			
+//			Queue<Node> q = new LinkedList<Node>();
+//			q.add(Graph.getNodeByUrl(s));
+//			
+//			
+//			
+//		}while(!s.equals("exit"));
 	}
 	
 	
